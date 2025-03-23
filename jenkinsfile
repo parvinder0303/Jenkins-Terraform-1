@@ -1,0 +1,73 @@
+pipeline {
+  agent any 
+
+  environment{
+    AWS_ACCESS_KEY_ID = credentials('cdc6c0b7-b471-4e38-a321-6d56b617ad13')
+    AWS_SECRET_ACCESS_KEY = credentials('5f5cd031-c31d-4c0c-9083-6207e849b7bf')
+    AWS_REGION = 'eu-north-1'  // AWS region where the EC2 instance will be created
+    INSTANCE_TYPE = 't3.medium'  // Choose the instance type for Ubuntu EC2
+    AMI_ID = 'ami-09a9858973b288bdd'  // Example Ubuntu AMI (update as necessary)
+    VPC_ID = 'vpc-0116d6fd4a36821cc'
+    KEY_NAME = '27Feb-Public'  // Your EC2 Key Pair for SSH access
+    SECURITY_GROUP = 'ssh-SG-EC2-27Feb'  // Security group ID for the instance
+    SUBNET_ID = 'subnet-083c1f591fccde092'  // Subnet ID where the EC2 instance will be created
+    INSTANCE_NAME = 'my-ubuntu-instance'
+  }
+
+ stages {
+        stage('Clone Git Repository') {
+            steps {
+                git 'https://github.com/your-repo/your-project.git'  // Replace with your Git repo URL
+            }
+        }
+
+        stage('Create EC2 Instance') {
+            steps {
+                script {
+                    def createInstanceCmd = """
+                        aws ec2 run-instances \
+                        --image-id ${AMI_ID} \
+                        --instance-type ${INSTANCE_TYPE} \
+                        --key-name ${KEY_NAME} \
+                        --security-group-ids ${SECURITY_GROUP} \
+                        --vpc_id ${VPC_ID} \
+                        --subnet-id ${SUBNET_ID} \
+                        --count 1 \
+                        --region ${AWS_REGION} \
+                        --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=${INSTANCE_NAME}}]'
+                    """
+
+                    // Run the AWS CLI command to create the EC2 instance
+                    sh createInstanceCmd
+                }
+            }
+        }
+
+        stage('Check EC2 Instance Status') {
+            steps {
+                script {
+                    // Get the instance ID
+                    def instanceId = sh(script: "aws ec2 describe-instances --filters 'Name=tag:Name,Values=${INSTANCE_NAME}' --query 'Reservations[0].Instances[0].InstanceId' --output text", returnStdout: true).trim()
+                    
+                    // Check the status of the instance
+                    def instanceState = sh(script: "aws ec2 describe-instances --instance-ids ${instanceId} --query 'Reservations[0].Instances[0].State.Name' --output text", returnStdout: true).trim()
+                    echo "EC2 Instance ${instanceId} is in ${instanceState} state."
+                }
+            }
+        }
+
+        stage('Deploy Application to EC2') {
+            steps {
+                script {
+                    // After EC2 instance is up, you can SSH into the instance to deploy your app
+                    def instanceIp = sh(script: "aws ec2 describe-instances --instance-ids ${instanceId} --query 'Reservations[0].Instances[0].PublicIpAddress' --output text", returnStdout: true).trim()
+
+                    // Now, you can SSH to the instance and deploy the app, assuming you've set up SSH keys
+                    sh """
+                    ssh -o StrictHostKeyChecking=no -i /path/to/your/private-key.pem ubuntu@${instanceIp} 'bash -s' < ./deploy.sh
+                    """
+                }
+            }
+        }
+    }
+}
